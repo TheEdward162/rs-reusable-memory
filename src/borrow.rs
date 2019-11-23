@@ -20,6 +20,8 @@ impl std::error::Error for ReusableMemoryBorrowError {
 /// Borrow of the reusable memory.
 ///
 /// This struct borrows a properly aligned subset of the memory owned by `ReusableMemory`.
+///
+/// This structs semantically acts as `&'mem mut [T]` for variance, `Send` and `Sync` purposes.
 pub struct ReusableMemoryBorrow<'mem, T> {
 	// This could be `*mut T`, but we know it can't be null.
 	memory: ptr::NonNull<T>,
