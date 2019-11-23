@@ -1,6 +1,6 @@
 //! To reuse memory, it needs to be allocated first:
 //! ```
-//! let mut memory: ReusableMemory<u8> = ReusableMemory::new().unwrap();
+//! let mut memory: ReusableMemory<u8> = ReusableMemory::new().unwrap(); 
 //! ```
 //! *`new` will return an `Err` if the generic type passed to `ReusableMemory` is a zero sized type.*
 //!
@@ -36,17 +36,13 @@ mod tests {
 	fn push_twice_usize() {
 		let mut rm: ReusableMemory<u8> = ReusableMemory::new().unwrap();
 		{
-			let mut borrow = rm.borrow_mut_as::<usize>(
-				NonZeroUsize::new(3).unwrap()
-			).unwrap();
+			let mut borrow = rm.borrow_mut_as::<usize>(NonZeroUsize::new(3).unwrap()).unwrap();
 			borrow.push(1).unwrap();
 			borrow.push(18446744073709551615).unwrap();
 
 			// eprintln!("{:?}", borrow);
 
-			assert_eq!(
-				borrow.as_ptr().align_offset(std::mem::align_of::<usize>()), 0
-			);
+			assert_eq!(borrow.as_ptr().align_offset(std::mem::align_of::<usize>()), 0);
 		}
 	}
 
@@ -62,9 +58,7 @@ mod tests {
 					DROP_COUNTER += 1;
 				}
 
-				DropCounter {
-					_value: value
-				}
+				DropCounter { _value: value }
 			}
 		}
 		impl Drop for DropCounter {
@@ -77,16 +71,11 @@ mod tests {
 
 		let mut rm: ReusableMemory<u8> = ReusableMemory::new().unwrap();
 		{
-			let mut borrow = rm.borrow_mut_as::<DropCounter>(
-				NonZeroUsize::new(2).unwrap()
-			).unwrap();
+			let mut borrow =
+				rm.borrow_mut_as::<DropCounter>(NonZeroUsize::new(2).unwrap()).unwrap();
 
-			borrow.push(
-				DropCounter::new(1)
-			).unwrap();
-			borrow.push(
-				DropCounter::new(18446744073709551615)
-			).unwrap();
+			borrow.push(DropCounter::new(1)).unwrap();
+			borrow.push(DropCounter::new(18446744073709551615)).unwrap();
 
 			unsafe {
 				assert_eq!(DROP_COUNTER, 2);
@@ -105,9 +94,7 @@ mod tests {
 		let mut rm: ReusableMemory<u8> = ReusableMemory::new().unwrap();
 		{
 			let capacity = NonZeroUsize::new(1).unwrap();
-			let mut borrow = rm.borrow_mut_as::<usize>(
-				capacity
-			).unwrap();
+			let mut borrow = rm.borrow_mut_as::<usize>(capacity).unwrap();
 			borrow.push(1).unwrap();
 
 			match borrow.push(1) {
