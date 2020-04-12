@@ -21,16 +21,15 @@
 //! The borrowed memory is automatically returned when the object is dropped, and the pushed values are dropped as well.
 
 mod base;
-mod borrow;
+pub mod borrow;
 
 pub use base::*;
-pub use borrow::*;
 
 #[cfg(test)]
 mod tests {
 	use std::num::NonZeroUsize;
 
-	use super::*;
+	use super::{borrow::*, *};
 
 	/// Tests borrow of `u8` from base of `u8`.
 	#[test]
@@ -41,12 +40,8 @@ mod tests {
 			borrow.push(1).unwrap();
 			borrow.push(std::u16::MAX).unwrap();
 
-			assert_eq!(
-				borrow.as_ptr().align_offset(std::mem::align_of::<u16>()), 0
-			);
-			assert_eq!(
-				borrow.len(), 2
-			);
+			assert_eq!(borrow.as_ptr().align_offset(std::mem::align_of::<u16>()), 0);
+			assert_eq!(borrow.len(), 2);
 		}
 	}
 
@@ -60,9 +55,7 @@ mod tests {
 			borrow.push(std::i16::MAX).unwrap();
 
 			assert_eq!(borrow.as_ptr().align_offset(std::mem::align_of::<i16>()), 0);
-			assert_eq!(
-				borrow.len(), 2
-			);
+			assert_eq!(borrow.len(), 2);
 		}
 	}
 
@@ -78,43 +71,180 @@ mod tests {
 			borrow.push(std::usize::MAX).unwrap();
 
 			assert_eq!(borrow.as_ptr().align_offset(std::mem::align_of::<usize>()), 0);
-			assert_eq!(
-				borrow.len(), 2
-			);
+			assert_eq!(borrow.len(), 2);
+		}
+	}
+
+	#[test]
+	fn borrow_two_same_type() {
+		let mut rm: ReusableMemory<u16> = ReusableMemory::new().unwrap();
+		{
+			let (mut borrow_a, mut borrow_b) = rm
+				.borrow_mut_two_as::<u16, i16>([
+					NonZeroUsize::new(6).unwrap(),
+					NonZeroUsize::new(3).unwrap()
+				])
+				.unwrap();
+
+			borrow_a.push(1).unwrap();
+			borrow_a.push(2).unwrap();
+			borrow_a.push(std::u16::MAX).unwrap();
+
+			borrow_b.push(-1).unwrap();
+			borrow_b.push(-2).unwrap();
+			borrow_b.push(std::i16::MIN).unwrap();
+
+			assert_eq!(borrow_a.as_ptr().align_offset(std::mem::align_of::<u16>()), 0);
+			assert_eq!(borrow_b.as_ptr().align_offset(std::mem::align_of::<i16>()), 0);
+
+			assert_eq!(borrow_a.as_slice(), &[1, 2, std::u16::MAX]);
+			assert_eq!(borrow_b.as_slice(), &[-1, -2, std::i16::MIN]);
+		}
+	}
+
+	/// Tests borrow of `u64`,`u32` and `u16` from base of `u8`.
+	///
+	/// This fails on Miri because it cannot align the pointers (yet?)
+	#[test]
+	fn borrow_three_different_align() {
+		let mut rm: ReusableMemory<u8> = ReusableMemory::new().unwrap();
+		{
+			let (mut borrow_u64, mut borrow_u32, mut borrow_u16) = rm
+				.borrow_mut_three_as::<u64, u32, u16>([
+					NonZeroUsize::new(1).unwrap(),
+					NonZeroUsize::new(2).unwrap(),
+					NonZeroUsize::new(4).unwrap()
+				])
+				.unwrap();
+
+			borrow_u64.push(1).unwrap();
+
+			borrow_u32.push(1).unwrap();
+			borrow_u32.push(2).unwrap();
+
+			borrow_u16.push(1).unwrap();
+			borrow_u16.push(2).unwrap();
+			borrow_u16.push(3).unwrap();
+			borrow_u16.push(4).unwrap();
+
+			assert_eq!(borrow_u64.as_ptr().align_offset(std::mem::align_of::<u64>()), 0);
+			assert_eq!(borrow_u32.as_ptr().align_offset(std::mem::align_of::<u32>()), 0);
+			assert_eq!(borrow_u16.as_ptr().align_offset(std::mem::align_of::<u16>()), 0);
+
+			assert_eq!(borrow_u64.as_slice(), &[1u64]);
+			assert_eq!(borrow_u32.as_slice(), &[1u32, 2u32]);
+			assert_eq!(borrow_u16.as_slice(), &[1u16, 2u16, 3u16, 4u16]);
+		}
+	}
+
+	#[test]
+	fn push_iter() {
+		let mut rm: ReusableMemory<u8> = ReusableMemory::new().unwrap();
+		{
+			let mut borrow = rm.borrow_mut_as::<u8>(NonZeroUsize::new(6).unwrap()).unwrap();
+			let iter = (0 .. 5u8).into_iter();
+
+			borrow.push_from_iter(iter).unwrap();
+			assert_eq!(borrow.as_slice(), &[0, 1, 2, 3, 4]);
+		}
+	}
+
+	#[test]
+	fn push_iter_fill_up() {
+		let mut rm: ReusableMemory<u8> = ReusableMemory::new().unwrap();
+		{
+			let mut borrow = rm.borrow_mut_as::<u8>(NonZeroUsize::new(5).unwrap()).unwrap();
+			let iter = (0 .. 5u8).into_iter();
+
+			let mut iter = borrow.push_from_iter(iter).unwrap_err();
+			assert_eq!(borrow.as_slice(), &[0, 1, 2, 3, 4]);
+			assert_eq!(iter.next(), None);
+		}
+	}
+
+	#[test]
+	fn push_iter_fill_up_peekable() {
+		let mut rm: ReusableMemory<u8> = ReusableMemory::new().unwrap();
+		{
+			let mut borrow = rm.borrow_mut_as::<u8>(NonZeroUsize::new(5).unwrap()).unwrap();
+			let iter = (0 .. 5u8).into_iter();
+
+			borrow.push_from_iter_peeking(iter).unwrap();
+			assert_eq!(borrow.as_slice(), &[0, 1, 2, 3, 4]);
+		}
+	}
+
+	#[test]
+	fn push_iter_over_capacity() {
+		let mut rm: ReusableMemory<u8> = ReusableMemory::new().unwrap();
+		{
+			let mut borrow = rm.borrow_mut_as::<u8>(NonZeroUsize::new(4).unwrap()).unwrap();
+			let iter = (0 .. 5u8).into_iter();
+
+			let mut iter = borrow.push_from_iter(iter).unwrap_err();
+			assert_eq!(borrow.as_slice(), &[0, 1, 2, 3]);
+			assert_eq!(iter.next(), Some(4));
 		}
 	}
 
 	/// Tests that borrow can push from ExactSizeIterator.
 	#[test]
-	fn iter() {
+	fn push_exact_iter() {
 		let mut rm: ReusableMemory<u8> = ReusableMemory::new().unwrap();
 		{
 			let mut borrow = rm.borrow_mut_as::<u8>(NonZeroUsize::new(3).unwrap()).unwrap();
 			let iter = vec![1, std::u8::MAX].into_iter();
 
 			borrow.push_from_exact_iter(iter).unwrap();
-			assert_eq!(
-				borrow.as_ptr().align_offset(std::mem::align_of::<u8>()), 0
-			);
-			assert_eq!(
-				borrow.len(), 2
-			);
+			assert_eq!(borrow.as_ptr().align_offset(std::mem::align_of::<u8>()), 0);
+			assert_eq!(borrow.len(), 2);
 		}
 	}
 
 	/// Tests that pushing from an iterator beyond capacity returns an error.
 	#[test]
-	fn iter_over_capacity() {
+	fn push_exact_iter_over_capacity() {
 		let mut rm: ReusableMemory<u8> = ReusableMemory::new().unwrap();
 		{
 			let capacity = NonZeroUsize::new(1).unwrap();
 			let mut borrow = rm.borrow_mut_as::<u8>(capacity).unwrap();
 			let iter = vec![1, std::u8::MAX].into_iter();
 
-			match borrow.push_from_exact_iter(iter) {
-				Err(ReusableMemoryBorrowError::NotEnoughCapacity(c)) if c == capacity => (),
-				_ => panic!("Expected Err(ReusableMemoryBorrowError::NotEnoughCapacity)")
+			match borrow.push_from_exact_iter(iter.clone()) {
+				Err(err_iter) if err_iter.as_slice() == iter.as_slice() => (),
+				_ => panic!("Expected Err(iter)")
 			}
+		}
+	}
+
+	#[test]
+	fn pop() {
+		let mut rm: ReusableMemory<u8> = ReusableMemory::new().unwrap();
+		{
+			let capacity = NonZeroUsize::new(1).unwrap();
+			let mut borrow = rm.borrow_mut_as::<u8>(capacity).unwrap();
+
+			borrow.push(1).unwrap();
+
+			assert_eq!(borrow.pop(), Some(1));
+			assert_eq!(borrow.pop(), None);
+		}
+	}
+
+	#[test]
+	fn drain() {
+		let mut rm: ReusableMemory<u8> = ReusableMemory::new().unwrap();
+		{
+			let mut borrow = rm.borrow_mut_as::<u8>(NonZeroUsize::new(5).unwrap()).unwrap();
+			borrow.push_from_exact_iter(0 ..= 4).unwrap();
+
+			{
+				let mut drain = borrow.drain(1 ..= 3);
+				assert_eq!(drain.next(), Some(1));
+				assert_eq!(drain.next_back(), Some(3));
+			}
+
+			assert_eq!(borrow.as_slice(), &[0, 4]);
 		}
 	}
 

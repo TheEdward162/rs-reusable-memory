@@ -1,4 +1,16 @@
-use std::{iter::ExactSizeIterator, marker::PhantomData, mem, num::NonZeroUsize, ptr};
+use std::{
+	borrow::{Borrow, BorrowMut},
+	marker::PhantomData,
+	mem,
+	num::NonZeroUsize,
+	ops::{Deref, DerefMut, RangeBounds},
+	ptr
+};
+
+pub mod drain;
+mod manual_specialization;
+
+pub use drain::BorrowDrainIter;
 
 #[derive(Debug, Copy, Clone)]
 pub enum ReusableMemoryBorrowError {
@@ -32,22 +44,38 @@ pub struct ReusableMemoryBorrow<'mem, T> {
 	boo: PhantomData<&'mem mut [T]>
 }
 impl<'mem, T> ReusableMemoryBorrow<'mem, T> {
-	pub(crate) fn new(memory: ptr::NonNull<T>, capacity: NonZeroUsize) -> Self {
+	/// Constructs memory borrow from raw parts.
+	///
+	/// ### Safety
+	///
+	/// * memory must be a valid pointer into `capacity * size_of::<T>()` bytes of memory.
+	pub unsafe fn from_raw_parts(memory: ptr::NonNull<T>, capacity: NonZeroUsize) -> Self {
 		ReusableMemoryBorrow { memory, len: 0, capacity, boo: PhantomData }
 	}
 
 	/// Returns number of `T`s currently stored.
-	pub fn len(&self) -> usize { self.len }
+	pub const fn len(&self) -> usize { self.len }
+
+	/// Returns number of `T`s currently stored.
+	pub unsafe fn set_len(&mut self, len: usize) { self.len = len; }
 
 	/// Returns number of `T`s that can be stored.
-	pub fn capacity(&self) -> NonZeroUsize { self.capacity }
+	pub const fn capacity(&self) -> NonZeroUsize { self.capacity }
 
-	/// Returns a pointer to the data.
-	pub fn as_ptr(&self) -> *const T { self.memory.as_ptr() as *const T }
+	/// Returns a const pointer to the data.
+	pub const fn as_ptr(&self) -> *const T { self.memory.as_ptr() as *const _ }
+
+	/// Returns a mut pointer to the data.
+	pub const fn as_mut_ptr(&self) -> *mut T { self.memory.as_ptr() }
 
 	/// Returns a slice view of the data.
 	pub fn as_slice(&self) -> &[T] {
 		unsafe { std::slice::from_raw_parts(self.as_ptr(), self.len()) }
+	}
+
+	/// Returns a mut slice view of the data.
+	pub fn as_mut_slice(&mut self) -> &mut [T] {
+		unsafe { std::slice::from_raw_parts_mut(self.as_ptr() as *mut _, self.len()) }
 	}
 
 	/// Drops all pushed values and sets the length to 0.
@@ -88,22 +116,50 @@ impl<'mem, T> ReusableMemoryBorrow<'mem, T> {
 		Ok(())
 	}
 
-	/// Pushes new values from `ExactSizeIterator`.
+	/// Pops from the end.
 	///
-	/// Returns Err if there is not enough capacity.
-	pub fn push_from_exact_iter<E: ExactSizeIterator<Item = T>>(
-		&mut self, iter: E
-	) -> Result<(), ReusableMemoryBorrowError> {
-		if self.len + iter.len() > self.capacity.get() {
-			return Err(ReusableMemoryBorrowError::NotEnoughCapacity(self.capacity))
+	/// Returns `None` if `self.len() == 0`.
+	pub fn pop(&mut self) -> Option<T> {
+		if self.len() == 0 {
+			return None
 		}
 
-		for elem in iter {
-			self.push(elem).unwrap()
-		}
+		let value = unsafe {
+			self.len -= 1;
+			ptr::read(self.memory.as_ptr().add(self.len))
+		};
 
-		Ok(())
+		Some(value)
 	}
+
+	/// Creates a draining iterator that removes the specified range in the borrow and yields the removed items.
+	///
+	/// This functions exactly as `Vec::drain`.
+	pub fn drain<'bor>(
+		&'bor mut self, range: impl RangeBounds<usize>
+	) -> BorrowDrainIter<'bor, 'mem, T> {
+		BorrowDrainIter::new(self, range)
+	}
+}
+impl<'mem, T> Deref for ReusableMemoryBorrow<'mem, T> {
+	type Target = [T];
+
+	fn deref(&self) -> &Self::Target { self.as_slice() }
+}
+impl<'mem, T> DerefMut for ReusableMemoryBorrow<'mem, T> {
+	fn deref_mut(&mut self) -> &mut Self::Target { self.as_mut_slice() }
+}
+impl<'mem, T> Borrow<[T]> for ReusableMemoryBorrow<'mem, T> {
+	fn borrow(&self) -> &[T] { self.as_slice() }
+}
+impl<'mem, T> BorrowMut<[T]> for ReusableMemoryBorrow<'mem, T> {
+	fn borrow_mut(&mut self) -> &mut [T] { self.as_mut_slice() }
+}
+impl<'mem, T> AsRef<[T]> for ReusableMemoryBorrow<'mem, T> {
+	fn as_ref(&self) -> &[T] { self.as_slice() }
+}
+impl<'mem, T> AsMut<[T]> for ReusableMemoryBorrow<'mem, T> {
+	fn as_mut(&mut self) -> &mut [T] { self.as_mut_slice() }
 }
 impl<'mem, T> Drop for ReusableMemoryBorrow<'mem, T> {
 	fn drop(&mut self) { self.clear(); }
