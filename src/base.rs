@@ -2,36 +2,6 @@ use std::{mem, num::NonZeroUsize, ptr};
 
 use super::borrow::ReusableMemoryBorrow;
 
-#[derive(Debug, Copy, Clone)]
-pub enum ReusableMemoryError {
-	ZeroSizedB,
-	ZeroSizedT,
-	/// Pointer to `B` could not be aligned to a pointer to `T`.
-	///
-	/// This error should never happen, since the pointer to `B` is provided by a `Vec` allocation
-	/// and should be properly aligned. A properly aligned pointer will always be alignable to other
-	/// power-of-two aligns.
-	CouldNotAlignPointer
-}
-impl std::fmt::Display for ReusableMemoryError {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		match self {
-			ReusableMemoryError::ZeroSizedB => {
-				write!(f, "Type B (base type) must not be zero sized.")
-			}
-			ReusableMemoryError::ZeroSizedT => {
-				write!(f, "Type T (borrowed type) must not be zero sized.")
-			}
-			ReusableMemoryError::CouldNotAlignPointer => {
-				write!(f, "Could not align pointer to be to a pointer to T.")
-			}
-		}
-	}
-}
-impl std::error::Error for ReusableMemoryError {
-	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { None }
-}
-
 /// `align_up(base, align)` returns the smallest greater integer than `base` aligned to `align`.
 ///
 /// More formally:
@@ -53,53 +23,49 @@ macro_rules! impl_borrow_mut_X_as {
 		pub fn $capacity_name: ident;
 		pub fn $name: ident<$($gen_name: ident),+>[$count: literal];
 	) => {
-		// pub fn $capacity_name<$($gen_name),+>(
-		// 	&self, capacity: [NonZeroUsize; $count]
-		// ) -> Result<[usize; $count + 1], ReusableMemoryError> {
-		// 	let align_of: [usize; $count] = [$(mem::align_of::<$gen_name>()),+];
-
-		// 	$(
-		// 		if mem::size_of::<$gen_name>() == 0 {
-		// 			return Err(ReusableMemoryError::ZeroSizedT)
-		// 		}
-		// 	)+
-
-		// 	let needed_bytes = 0;
-		// 	let counter = 0;
-
-		// 	$(
-		// 		// where the block for $gen_name starts, in bytes, and the index
-		// 		#[allow(non_snake_case)]
-		// 		let $gen_name: (usize, usize) = (align_up(needed_bytes, mem::align_of::<$gen_name>()), counter);
-		// 		// where the block from $gen_name ends
-		// 		let needed_bytes = $gen_name.0 + mem::size_of::<$gen_name>() * capacity[counter].get();
-
-		// 		#[allow(unused_variables)]
-		// 		let counter = counter + 1;
-		// 	)+
-
-		// 	// Add `align - 1` to `needed_bytes` if align of `T` is more than align of `B`.
-		// 	let align_bump = if mem::align_of::<B>() >= mem::align_of::<T>() {
-		// 		0
-		// 	} else {
-		// 		align_of[0] - 1
-		// 	};
-		// 	// Add `align_bump` afterwards so that $gen_name starts are correct
-		// 	let needed_bytes = needed_bytes + align_bump;
-		// 	let needed_length = (needed_bytes + mem::size_of::<B>() - 1) / mem::size_of::<B>();
-
-		// 	Ok(needed_length)
-		// }
-
-		pub fn $name<'mem, $($gen_name),+>(
-			&'mem mut self, capacity: [NonZeroUsize; $count]
-		) -> Result<( $(ReusableMemoryBorrow<'mem, $gen_name>),+ ), ReusableMemoryError> {
+		pub fn $capacity_name<$($gen_name),+>(
+			&self, capacity: [NonZeroUsize; $count]
+		) -> usize {
 			let align_of: [usize; $count] = [$(mem::align_of::<$gen_name>()),+];
 
 			$(
-				if mem::size_of::<$gen_name>() == 0 {
-					return Err(ReusableMemoryError::ZeroSizedT)
-				}
+				assert_ne!(mem::size_of::<$gen_name>(), 0);
+			)+
+
+			let needed_bytes = 0;
+			let counter = 0;
+
+			$(
+				// where the block for $gen_name starts, in bytes, and the index
+				#[allow(non_snake_case)]
+				let $gen_name: (usize, usize) = (align_up(needed_bytes, mem::align_of::<$gen_name>()), counter);
+				// where the block from $gen_name ends
+				let needed_bytes = $gen_name.0 + mem::size_of::<$gen_name>() * capacity[counter].get();
+
+				#[allow(unused_variables)]
+				let counter = counter + 1;
+			)+
+
+			// Add `align - 1` to `needed_bytes` if align of `T` is more than align of `B`.
+			let align_bump = if mem::align_of::<B>() >= mem::align_of::<T>() {
+				0
+			} else {
+				align_of[0] - 1
+			};
+			// Add `align_bump` afterwards so that $gen_name starts are correct
+			let needed_bytes = needed_bytes + align_bump;
+			let needed_length = (needed_bytes + mem::size_of::<B>() - 1) / mem::size_of::<B>();
+
+			needed_length
+		}
+
+		pub fn $name<'mem, $($gen_name),+>(
+			&'mem mut self, capacity: [NonZeroUsize; $count]
+		) ->( $(ReusableMemoryBorrow<'mem, $gen_name>),+ ) {
+			let align_of: [usize; $count] = [$(mem::align_of::<$gen_name>()),+];
+
+			$(
+				assert_ne!(mem::size_of::<$gen_name>(), 0);
 			)+
 
 			let needed_bytes = 0;
@@ -133,23 +99,21 @@ macro_rules! impl_borrow_mut_X_as {
 			// Compute the offset we need from the vec pointer to have the proper alignment.
 			let align_offset = memory_ptr.align_offset(align_of[0]);
 			if align_offset == std::usize::MAX {
-				return Err(ReusableMemoryError::CouldNotAlignPointer)
+				panic!("Could not align pointer");
 			}
 
-			Ok(
-				unsafe {
-					(
-						$(
-							ReusableMemoryBorrow::from_raw_parts(
-								ptr::NonNull::new_unchecked(
-									(memory_ptr.add(align_offset) as *mut u8).add($gen_name.0) as *mut $gen_name
-								),
-								capacity[$gen_name.1]
-							)
-						),+
-					)
-				}
-			)
+			unsafe {
+				(
+					$(
+						ReusableMemoryBorrow::from_raw_parts(
+							ptr::NonNull::new_unchecked(
+								(memory_ptr.add(align_offset) as *mut u8).add($gen_name.0) as *mut $gen_name
+							),
+							capacity[$gen_name.1]
+						)
+					),+
+				)
+			}
 		}
 	}
 }
@@ -194,23 +158,20 @@ impl<B> ReusableMemory<B> {
 	/// * `std::mem::size_of::<B>()` must not be zero.
 	pub const unsafe fn new_unchecked() -> Self { ReusableMemory { vec: Vec::new() } }
 
-	pub fn new() -> Result<Self, ReusableMemoryError> { Self::with_capacity(0) }
+	/// Panics if `size_of::<B>() == 0`
+	pub fn new() -> Self { Self::with_capacity(0) }
 
 	/// Counted in the capacity of `B`.
-	pub fn with_capacity(len: usize) -> Result<Self, ReusableMemoryError> {
-		if mem::size_of::<B>() == 0 {
-			return Err(ReusableMemoryError::ZeroSizedB)
-		}
+	///
+	/// Panics if `size_of::<B>() == 0`
+	pub fn with_capacity(len: usize) -> Self {
+		assert_ne!(mem::size_of::<B>(), 0);
 
-		Ok(ReusableMemory { vec: Vec::with_capacity(len) })
+		ReusableMemory { vec: Vec::with_capacity(len) }
 	}
 
-	pub fn needed_capacity_for<T>(
-		&self, count: NonZeroUsize
-	) -> Result<usize, ReusableMemoryError> {
-		if mem::size_of::<T>() == 0 {
-			return Err(ReusableMemoryError::ZeroSizedT)
-		}
+	pub fn needed_capacity_for<T>(&self, count: NonZeroUsize) -> usize {
+		assert_ne!(mem::size_of::<T>(), 0);
 
 		// Add `align - 1` to `needed_bytes` if align of `T` is more than align of `B`.
 		let align_bump =
@@ -224,7 +185,7 @@ impl<B> ReusableMemory<B> {
 			(needed_bytes + mem::size_of::<B>() - 1) / mem::size_of::<B>()
 		};
 
-		Ok(needed_length)
+		needed_length
 	}
 
 	/// Borrows the reusable memory as a different type.
@@ -235,8 +196,8 @@ impl<B> ReusableMemory<B> {
 	/// Also returns an error when the pointer could not be aligned properly for `T`.
 	pub fn borrow_mut_as<'mem, T>(
 		&'mem mut self, capacity: NonZeroUsize
-	) -> Result<ReusableMemoryBorrow<'mem, T>, ReusableMemoryError> {
-		let needed_length = self.needed_capacity_for::<T>(capacity)?;
+	) -> ReusableMemoryBorrow<'mem, T> {
+		let needed_length = self.needed_capacity_for::<T>(capacity);
 
 		// Reserve so at least `capacity` of `T`s fit, plus possible align offset.
 		self.vec.reserve(needed_length);
@@ -245,14 +206,14 @@ impl<B> ReusableMemory<B> {
 		// Compute the offset we need from the vec pointer to have the proper alignment.
 		let align_offset = memory_ptr.align_offset(mem::align_of::<T>());
 		if align_offset == std::usize::MAX {
-			return Err(ReusableMemoryError::CouldNotAlignPointer)
+			panic!("Could not align pointer");
 		}
 
-		Ok(unsafe {
+		unsafe {
 			ReusableMemoryBorrow::from_raw_parts(
 				ptr::NonNull::new_unchecked(memory_ptr.add(align_offset) as *mut T),
 				capacity
 			)
-		})
+		}
 	}
 }
