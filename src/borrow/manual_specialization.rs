@@ -43,13 +43,24 @@ impl<'mem, T> ReusableMemoryBorrow<'mem, T> {
 		Err(iter)
 	}
 
+	pub fn push_from_iter_size_hint<I: Iterator<Item = T>>(&mut self, iter: I) -> Result<(), I> {
+		let hint = iter.size_hint();
+		let hinted_max = hint.1.unwrap_or(hint.0);
+
+		if hinted_max > self.capacity().get() - self.len() {
+			return Err(iter)
+		}
+
+		self.push_from_iter(iter)
+	}
+
 	/// Pushes new values from `iter: impl ExactSizeIterator`.
 	///
 	/// Returns the iterator if there is not enough capacity.
 	pub fn push_from_exact_iter<I: ExactSizeIterator<Item = T>>(
 		&mut self, iter: I
 	) -> Result<(), I> {
-		if self.len + iter.len() > self.capacity.get() {
+		if self.len() + iter.len() > self.capacity.get() {
 			return Err(iter)
 		}
 
