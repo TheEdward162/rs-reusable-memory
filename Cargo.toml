@@ -1,6 +1,6 @@
 [package]
 name = "reusable-memory"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["TheEdward162 <TheEdward162@gmail.com>"]
 edition = "2018"
 repository = "https://github.com/TheEdward162/rs-reusable-memory"
